@@ -29,7 +29,7 @@ jobs:
         run: |
           rm -rf project
           mkdir project
-          unzip -q SdjRoumko_Mastering_project.zip -d project
+          unzip -q SdjRoumko_Mastering_v0.3.0.zip -d project
 
       - name: Build Debug APK
         working-directory: project
