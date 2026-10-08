@@ -25,78 +25,29 @@ jobs:
         with:
           gradle-version: '9.1.0'
 
-      - name: Extract v0.3.0 project
+      - name: Extract project
         run: |
           rm -rf project
           mkdir project
           unzip -q SdjRoumko_Mastering_v0.3.0.zip -d project
 
-      - name: Apply startup stability fixes
+      - name: Fix startup
         working-directory: project
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          main_file = Path("app/src/main/java/com/sdjroumko/mastering/MainActivity.kt")
-          text = main_file.read_text()
+          f = Path("app/src/main/java/com/sdjroumko/mastering/MainActivity.kt")
+          s = f.read_text()
 
-          text = text.replace(
+          s = s.replace(
               "private val eqBands = MasterEngine.defaultBands().toMutableList()",
               "private val eqBands by lazy { MasterEngine.defaultBands().toMutableList() }"
           )
 
-          old = """        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
-        buildEqUi()
-        setupTargets()
-"""
+          f.write_text(s)
 
-          new = """        try {
-            binding = ActivityMainBinding.inflate(layoutInflater)
-            setContentView(binding.root)
-            buildEqUi()
-            setupTargets()
-        } catch (e: Throwable) {
-            android.util.Log.e("SdjRoumko", "Startup crash", e)
-
-            val errorView = android.widget.TextView(this).apply {
-                text = "SdjRοumko Mastering\\n\\nSTARTUP ERROR\\n\\n${e.javaClass.name}: ${e.message}\\n\\n${e.stackTraceToString()}"
-                textSize = 13f
-                setPadding(32, 32, 32, 32)
-                setTextIsSelectable(true)
-            }
-
-            setContentView(errorView)
-            return
-        }
-"""
-
-          if old not in text:
-              raise SystemExit("Startup block was not found")
-
-          main_file.write_text(text.replace(old, new))
-
-          styles = Path("app/src/main/res/values/styles.xml")
-          style_text = styles.read_text()
-
-          style_text = style_text.replace(
-              'parent="Theme.Material3.DayNight.NoActionBar"',
-              'parent="Theme.AppCompat.DayNight.NoActionBar"'
-          )
-
-          styles.write_text(style_text)
-
-          gradle_file = Path("app/build.gradle.kts")
-          gradle_text = gradle_file.read_text()
-
-          gradle_text = gradle_text.replace(
-              "targetSdk = 35",
-              "targetSdk = 34"
-          )
-
-          gradle_file.write_text(gradle_text)
-
-          print("Startup stability fixes applied successfully.")
+          print("Startup fix applied.")
           PY
 
       - name: Build Debug APK
