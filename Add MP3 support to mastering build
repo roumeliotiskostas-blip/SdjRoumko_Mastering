@@ -3,25 +3,21 @@ name: Build APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle 9.1.0
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.1.0'
 
@@ -31,94 +27,96 @@ jobs:
           mkdir project
           unzip -q SdjRoumko_Mastering_v0.3.0.zip -d project
 
-      - name: Fix startup and add MP3 support
+      - name: Add MP3 support
         working-directory: project
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          f = Path("app/src/main/java/com/sdjroumko/mastering/MainActivity.kt")
-          s = f.read_text()
+          f=Path("app/src/main/java/com/sdjroumko/mastering/MainActivity.kt")
+          s=f.read_text()
 
-          s = s.replace(
-              "private val eqBands = MasterEngine.defaultBands().toMutableList()",
-              "private val eqBands by lazy { MasterEngine.defaultBands().toMutableList() }"
-          )
+          s=s.replace(
+          "private val eqBands = MasterEngine.defaultBands().toMutableList()",
+          "private val eqBands by lazy { MasterEngine.defaultBands().toMutableList() }")
 
-          s = s.replace(
-              'binding.status.text = "Loading WAV..."',
-              'binding.status.text = "Loading audio..."'
-          )
+          s=s.replace(
+          "val data = WavCodec.read(contentResolver, uri)",
+          """val data=if(uri.toString().lowercase().endsWith(".mp3"))AudioDecoder.decodeMp3(contentResolver,uri)else WavCodec.read(contentResolver,uri)""")
 
-          old = 'val data = WavCodec.read(contentResolver, uri)'
-          new = '''val data = if (
-                      uri.toString().lowercase().endsWith(".mp3")
-                  ) {
-                      AudioDecoder.decodeMp3(contentResolver, uri)
-                  } else {
-                      WavCodec.read(contentResolver, uri)
-                  }'''
-
-          s = s.replace(old, new)
-
-          s = s.replace(
-              'picker.launch(arrayOf("audio/wav", "audio/x-wav", "audio/*"))',
-              'picker.launch(arrayOf("audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3", "audio/*"))'
-          )
+          s=s.replace(
+          'arrayOf("audio/wav", "audio/x-wav", "audio/*")',
+          'arrayOf("audio/wav","audio/x-wav","audio/mpeg","audio/mp3","audio/*")')
 
           f.write_text(s)
 
-          decoder = Path("app/src/main/java/com/sdjroumko/mastering/AudioDecoder.kt")
-          decoder.parent.mkdir(parents=True, exist_ok=True)
-
-          decoder.write_text(r'''package com.sdjroumko.mastering
-
+          Path("app/src/main/java/com/sdjroumko/mastering/AudioDecoder.kt").write_text(r'''package com.sdjroumko.mastering
 import android.content.ContentResolver
-import android.media.MediaCodec
-import android.media.MediaExtractor
-import android.media.MediaFormat
+import android.media.*
 import android.net.Uri
+import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-object AudioDecoder {
+object AudioDecoder{
+ fun decodeMp3(r:ContentResolver,u:Uri):WavData{
+  val e=MediaExtractor()
+  val a=r.openAssetFileDescriptor(u,"r")?:error("Cannot open MP3")
+  e.setDataSource(a.fileDescriptor,a.startOffset,a.length);a.close()
+  var ti=-1
+  for(i in 0 until e.trackCount){
+   if(e.getTrackFormat(i).getString(MediaFormat.KEY_MIME)?.startsWith("audio/")==true){ti=i;break}
+  }
+  if(ti<0)error("No audio track")
+  e.selectTrack(ti)
+  val inf=e.getTrackFormat(ti)
+  val mime=inf.getString(MediaFormat.KEY_MIME)?:error("Unknown audio")
+  val c=MediaCodec.createDecoderByType(mime)
+  c.configure(inf,null,null,0);c.start()
+  val out=ByteArrayOutputStream()
+  val bi=MediaCodec.BufferInfo()
+  var done=false
+  var input=false
+  var rate=inf.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+  var ch=inf.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+  while(!done){
+   if(!input){
+    val x=c.dequeueInputBuffer(10000)
+    if(x>=0){
+     val b=c.getInputBuffer(x)!!
+     val n=e.readSampleData(b,0)
+     if(n<0){c.queueInputBuffer(x,0,0,0,MediaCodec.BUFFER_FLAG_END_OF_STREAM);input=true}
+     else{c.queueInputBuffer(x,0,n,e.sampleTime,0);e.advance()}
+    }
+   }
+   val x=c.dequeueOutputBuffer(bi,10000)
+   if(x>=0){
+    val b=c.getOutputBuffer(x)
+    if(b!=null&&bi.size>0){
+     val z=ByteArray(bi.size);b.position(bi.offset);b.limit(bi.offset+bi.size);b.get(z);out.write(z)
+    }
+    c.releaseOutputBuffer(x,false)
+    if(bi.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM!=0)done=true
+   }else if(x==MediaCodec.INFO_OUTPUT_FORMAT_CHANGED){
+    val f=c.outputFormat
+    if(f.containsKey(MediaFormat.KEY_SAMPLE_RATE))rate=f.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+    if(f.containsKey(MediaFormat.KEY_CHANNEL_COUNT))ch=f.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+   }
+  }
+  c.stop();c.release();e.release()
+  val z=out.toByteArray()
+  val bb=ByteBuffer.wrap(z).order(ByteOrder.LITTLE_ENDIAN)
+  val samples=FloatArray(z.size/2){bb.short/32768f}
+  return WavData(rate,ch,samples)
+ }
+}''')
+          PY
 
-    fun decodeMp3(resolver: ContentResolver, uri: Uri): WavData {
-        val extractor = MediaExtractor()
-        val afd = resolver.openAssetFileDescriptor(uri, "r")
-            ?: throw IllegalArgumentException("Cannot open MP3 file")
+      - name: Build Debug APK
+        working-directory: project
+        run: gradle --no-daemon --stacktrace assembleDebug
 
-        try {
-            extractor.setDataSource(
-                afd.fileDescriptor,
-                afd.startOffset,
-                afd.length
-            )
-        } finally {
-            afd.close()
-        }
-
-        var trackIndex = -1
-
-        for (i in 0 until extractor.trackCount) {
-            val format = extractor.getTrackFormat(i)
-            val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
-            if (mime.startsWith("audio/")) {
-                trackIndex = i
-                break
-            }
-        }
-
-        if (trackIndex < 0) {
-            extractor.release()
-            throw IllegalArgumentException("No audio track found")
-        }
-
-        extractor.selectTrack(trackIndex)
-
-        val inputFormat = extractor.getTrackFormat(trackIndex)
-        val mime = inputFormat.getString(MediaFormat.KEY_MIME)
-            ?: throw IllegalArgumentException("Unknown audio format")
-
-        val codec = MediaCodec.createDecoderByType(mime)
-        codec.configure(inputFormat, null, null,
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SdjRoumko-Mastering-FIXED
+          path: project/app/build/outputs/apk/debug/app-debug.apk
